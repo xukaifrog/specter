@@ -1,16 +1,16 @@
 {
-    "UserID": 10123,
+    "UserID": "10123",
     "BillingName": "Tyler A. Beverley",
     "BillingAddress": { 
         "Address": "1152 Symphony Lane", 
         "City": "Chaska",  
         "State": "Minnesota",  
-        "Zip": 55318,  
+        "Zip": "55318",  
         "Country": "USA"
     }, 
     "CreditCardInfo": { 
         "CCNumber":"111111111111111", 
-        "CardVerficationCode": 123,
-        "ExpirationDate": "07/10"
+        "CVC": "123",
+        "ExpirDate": "07/10"
     }
 }

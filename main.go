@@ -10,6 +10,7 @@ import (
 	//"io/ioutil"
 	"log"
 	"net/http"
+	//"strconv"
 	"os"
 )
 
@@ -23,8 +24,8 @@ type BillingAddress struct {
 
 type CreditCardInfo struct {
 	CreditCardNumber     string `form:"CCNumber"`
-	CardVerificationCode string `form:"CardVerificationCode"`
-	ExpirationDate       string `form:"ExpirationDate"`
+	CardVerificationCode string `form:"CVC"`
+	ExpirationDate       string `form:"ExpirDate"`
 }
 
 type BillingInfo struct {
@@ -44,7 +45,6 @@ func ConnectDB() *(sql.DB) {
 	if err != nil {
 		log.Fatal(err)
 	}
-
 	return db
 }
 
@@ -57,8 +57,8 @@ func CreateUsersTable() {
 
 	billing := `
 	CREATE TABLE Billing( userID integer not null primary key,
-	address text, City text, Minnesota text, Zip integer, Country text, 
-	CCNum text, CVC integer, ExpirationDate text );`
+	billingName text, address text, city text, state text, zip integer, country text, 
+	CCNum text, CVC integer, expirDate text );`
 
 	_, err1 := db.Exec(wallets)
 	_, err2 := db.Exec(billing)
@@ -90,19 +90,85 @@ func CreateWallet(userID string) string {
 	c := ConnectDB()
 
 	stm := `
-		INSERT INTO Users(userId, address, privateKey, seedPhrase)  
+		INSERT INTO Wallets(userId, address, privateKey, seedPhrase)  
 		VALUES(?,?,?,?);`
+
 	_, err := c.Exec(stm, userID, ethAddress, privateKey, seedPhrase)
 	if err != nil {
-		log.Printf("Failed to insert new address for user: %d, ethAddress: %s\n", userID, ethAddress)
+		log.Printf("Failed to insert new address for user: %s, ethAddress: %s\n", userID, ethAddress)
 	}
 	return ethAddress
 }
 
+func SaveBillingInfo(binfo BillingInfo) error {
+
+	c := ConnectDB()
+	stmt := `
+		INSERT INTO Billing(userID, billingName, address, 
+		city, state, zip, country, CCNum, CVC, expirDate) 
+		VALUES( ?, ?, ?, ?, ?, ?, ?, ?, ?, ? );`
+
+	_, err := c.Exec(
+		stmt,
+		binfo.UserID,
+		binfo.BillingName,
+		binfo.BillingAddress.Address,
+		binfo.BillingAddress.City,
+		binfo.BillingAddress.State,
+		binfo.BillingAddress.Zip,
+		binfo.BillingAddress.Country,
+		binfo.CCInfo.CreditCardNumber,
+		binfo.CCInfo.CardVerificationCode,
+		binfo.CCInfo.ExpirationDate,
+	)
+
+	if err != nil {
+		log.Printf("Failed to insert new billing info for user: %s, billingInfo  %#v\n", binfo.UserID, binfo)
+		return err
+	} else {
+		return nil
+	}
+
+}
+
 func GetBillingInfo(userID string) BillingInfo {
 
-	return BillingInfo{}
+	var binfo BillingInfo
+	c := ConnectDB()
 
+	q := `SELECT name, address, city, state, zip, country, CCnum, CVC, expirDate FROM Billing WHERE userID = ?`
+
+	rows, err := c.Query(q, userID)
+	if err != nil {
+		log.Printf("Failed to query DB for %s's billing information. \n", userID)
+		return binfo
+	}
+
+	defer rows.Close()
+	row := rows.Next()
+
+	if row == false {
+		//if there is no billing information
+		log.Printf("No Billing info found for user: %s\n", userID)
+		return binfo
+	}
+	perr := rows.Scan(
+		&binfo.BillingName,
+		&binfo.BillingAddress.Address,
+		&binfo.BillingAddress.City,
+		&binfo.BillingAddress.State,
+		&binfo.BillingAddress.Zip,
+		&binfo.BillingAddress.Country,
+		&binfo.CCInfo.CreditCardNumber,
+		&binfo.CCInfo.CardVerificationCode,
+		&binfo.CCInfo.ExpirationDate,
+	)
+
+	if perr != nil {
+		log.Printf("Failed to get the billing info for user: %s\n.", userID)
+	}
+
+	return binfo
 }
 
 func GetUserWallet(userID string) UserWallet {
@@ -116,7 +182,7 @@ func GetUserWallet(userID string) UserWallet {
 
 	rows, err := c.Query(q, userID)
 	if err != nil {
-		log.Printf("Failed to find Address for user: %d\n", userID)
+		log.Printf("Failed to find wallet info for user: %s\n", userID)
 		return result
 	}
 
@@ -138,6 +204,12 @@ func GetUserWallet(userID string) UserWallet {
 	}
 	return result
 }
+
+/*
+ * API routing functions.
+ *
+ *
+ */
 
 func Ping(c *gin.Context) {
 	c.String(http.StatusOK, "pong")
@@ -164,18 +236,27 @@ func NewUser(c *gin.Context) {
 
 	err := c.ShouldBind(&binfo)
 	if err == nil {
-		//return UserID, and ethAddress
-		uinfo = GetUserWallet(binfo.UserID)
-		c.JSON(200, uinfo)
 
+		log.Printf("binfo: %#v\n", binfo)
+		uinfo = GetUserWallet(binfo.UserID)
+		err := SaveBillingInfo(binfo)
+
+		if err != nil {
+			log.Printf("Failed to save new billing info: %#v\n", binfo)
+			c.String(500, "Error in saving user billing information")
+		} else {
+			c.JSON(200, uinfo)
+		}
 	} else {
 		log.Printf("Failed to create a new user. Error: %v\n", err)
-		c.String(500, "Error Creating a new User.")
+		c.String(400, "Error in parsing user infomation.")
 	}
 }
 
 func StartServer() {
 	r := gin.Default()
+
+	//allow all origins
 	config := cors.DefaultConfig()
 	config.AllowAllOrigins = true
 	r.Use(cors.New(config))
@@ -187,7 +268,6 @@ func StartServer() {
 }
 
 func main() {
-
 	DropDB()
 	CreateUsersTable()
 	StartServer()
