@@ -66,7 +66,7 @@ func (w Wallet) PrivateKeyHex() string {
 	return privKey
 }
 
-func ConnectDB() *(sql.DB) {
+func connectDB() *(sql.DB) {
 	db, err := sql.Open("sqlite3", "./users.db")
 	if err != nil {
 		log.Fatal(err)
@@ -74,8 +74,8 @@ func ConnectDB() *(sql.DB) {
 	return db
 }
 
-func CreateUsersTable() {
-	db := ConnectDB()
+func createUsersTable() {
+	db := connectDB()
 
 	wallets := `
 	CREATE TABLE Wallets( userID integer not null primary key, 
@@ -98,7 +98,7 @@ func CreateUsersTable() {
 
 }
 
-func DropDB() {
+func dropDB() {
 	os.Remove("./users.db")
 }
 
@@ -107,7 +107,7 @@ func DropDB() {
  *	Save the corresponding keys to the DB.
  *
  */
-func CreateWallet(userID string) Wallet {
+func createWallet(userID string) Wallet {
 	//connect to eth provider, and create wallet return the public address.
 
 	var ethAddress common.Address
@@ -135,9 +135,9 @@ func CreateWallet(userID string) Wallet {
 
 }
 
-func SaveWalletInfo(wallet Wallet) error {
+func saveWalletInfo(wallet Wallet) error {
 
-	c := ConnectDB()
+	c := connectDB()
 
 	stm := `
 		INSERT INTO Wallets(userId, address, privateKey, publicKey)  
@@ -158,9 +158,9 @@ func SaveWalletInfo(wallet Wallet) error {
 	}
 }
 
-func SaveBillingInfo(binfo BillingInfo) error {
+func saveBillingInfo(binfo BillingInfo) error {
 
-	c := ConnectDB()
+	c := connectDB()
 	stmt := `
 		INSERT INTO Billing(userID, name, address, 
 		city, state, zip, country, CCNum, CVC, expirDate) 
@@ -189,10 +189,10 @@ func SaveBillingInfo(binfo BillingInfo) error {
 
 }
 
-func GetBillingInfo(userID string) BillingInfo {
+func getBillingInfo(userID string) BillingInfo {
 
 	var binfo BillingInfo
-	c := ConnectDB()
+	c := connectDB()
 
 	q := `SELECT userID, name, address, city, state, zip, country, CCnum, CVC, expirDate FROM Billing WHERE userID = ?`
 
@@ -229,13 +229,13 @@ func GetBillingInfo(userID string) BillingInfo {
 	return binfo
 }
 
-func GetUserWallet(userID string) UserWallet {
+func getUserWallet(userID string) UserWallet {
 	//Gets the user's address
 	//check databse, if not present create new
 
 	var ethAddress string
 	var result UserWallet
-	c := ConnectDB()
+	c := connectDB()
 	q := `SELECT address FROM Wallets where userID = ?;`
 
 	rows, qerr := c.Query(q, userID)
@@ -248,9 +248,9 @@ func GetUserWallet(userID string) UserWallet {
 	row := rows.Next()
 
 	if row == false {
-		wallet := CreateWallet(userID)
+		wallet := createWallet(userID)
 		ethAddress = wallet.Address.Hex()
-		err := SaveWalletInfo(wallet)
+		err := saveWalletInfo(wallet)
 
 		if err != nil {
 			log.Printf("Failed to save wallet info to the DB. Error: %s\n", err)
@@ -302,8 +302,8 @@ func NewUser(c *gin.Context) {
 	if err == nil {
 
 		//log.Printf("binfo: %#v\n", binfo)
-		uinfo = GetUserWallet(binfo.UserID)
-		err := SaveBillingInfo(binfo)
+		uinfo = getUserWallet(binfo.UserID)
+		err := saveBillingInfo(binfo)
 
 		if err != nil {
 			log.Printf("Failed to save new billing info. Error: %s\n", err)
@@ -317,6 +317,10 @@ func NewUser(c *gin.Context) {
 	}
 }
 
+func GetUserWallet(c *gin.Context) {
+
+}
+
 func StartServer() {
 	r := gin.Default()
 
@@ -327,12 +331,13 @@ func StartServer() {
 
 	r.GET("/", Index)
 	r.POST("/newuser", NewUser)
+	r.GET("/wallet/", GetUserWallet)
 
 	r.Run()
 }
 
 func main() {
-	DropDB()
-	CreateUsersTable()
+	dropDB()
+	createUsersTable()
 	StartServer()
 }

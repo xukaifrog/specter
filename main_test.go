@@ -12,13 +12,13 @@ import (
 func TestMain(m *testing.M) {
 	go StartServer()
 
-	DropDB()
-	CreateUsersTable()
+	dropDB()
+	createUsersTable()
 	os.Exit(m.Run())
 }
 
 func TestDBCreated(t *testing.T) {
-	c := ConnectDB()
+	c := connectDB()
 
 	err := c.Ping()
 	if err != nil {
@@ -90,7 +90,7 @@ func TestGetBillingInfo(t *testing.T) {
 		},
 	}
 
-	res := GetBillingInfo("10124")
+	res := getBillingInfo("10124")
 	if expected != res {
 		t.Errorf(
 			`Failed to get the correct user billing data from the database...
@@ -113,7 +113,7 @@ func TestGetWalletInfo(t *testing.T) {
 	cmd := *sendNewUserData("test/userData3.json")
 	cmd.Run()
 
-	info = GetUserWallet("10125")
+	info = getUserWallet("10125")
 
 	if info.EthAddress == "" {
 		t.Errorf("Failed to get a wallet after submiting a new user.\n Info Recieved = %#v\n", info)
