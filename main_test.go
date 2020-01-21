@@ -120,3 +120,26 @@ func TestGetWalletInfo(t *testing.T) {
 	}
 
 }
+
+func TestUserWalletEndpoint(t *testing.T) {
+
+	//curl http://localhost:8080/wallet/10126
+	cmd := *sendNewUserData("test/userData4.json")
+	cmd.Run()
+
+	out, err := exec.Command(
+		"curl",
+		"http://localhost:8080/wallet/10126",
+	).Output()
+
+	if err != nil {
+		t.Fatalf("Failed to get the output from curl to execute test post, error: %v\n", err)
+	}
+
+	var wallet UserWallet
+	perr := json.Unmarshal(out, &wallet)
+
+	if perr != nil {
+		t.Fatalf("Failed to get userinfo. Curl Output: %s\n", out)
+	}
+}

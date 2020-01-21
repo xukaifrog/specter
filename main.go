@@ -319,6 +319,11 @@ func NewUser(c *gin.Context) {
 
 func GetUserWallet(c *gin.Context) {
 
+	var uinfo UserWallet
+	userID := c.Params.ByName("userID")
+	uinfo = getUserWallet(userID)
+
+	c.JSON(200, uinfo)
 }
 
 func StartServer() {
@@ -331,7 +336,7 @@ func StartServer() {
 
 	r.GET("/", Index)
 	r.POST("/newuser", NewUser)
-	r.GET("/wallet/", GetUserWallet)
+	r.GET("/wallet/:userID", GetUserWallet)
 
 	r.Run()
 }
