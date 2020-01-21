@@ -1,18 +1,25 @@
 package main
 
 import (
-	//"encoding/json"
+	"crypto/ecdsa"
 	"database/sql"
 	"fmt"
+	"github.com/ethereum/go-ethereum/common"
+	"github.com/ethereum/go-ethereum/common/hexutil"
+	"github.com/ethereum/go-ethereum/crypto"
 	"github.com/gin-contrib/cors"
 	"github.com/gin-gonic/gin"
 	_ "github.com/mattn/go-sqlite3"
-	//"io/ioutil"
 	"log"
 	"net/http"
-	//"strconv"
 	"os"
+	//"encoding/json"
+	//"strconv"
+	//"io/ioutil"
+	//"github.com/ethereum/go-ethereum/ethclient"
 )
+
+const INFURA string = "https://mainnet.infura.io/v3/55cbeaa05bf14331b55bb8416e2183f9"
 
 type BillingAddress struct {
 	Address string `form:"Address"`
@@ -23,21 +30,40 @@ type BillingAddress struct {
 }
 
 type CreditCardInfo struct {
-	CreditCardNumber     string `form:"CCNumber"`
-	CardVerificationCode string `form:"CVC"`
-	ExpirationDate       string `form:"ExpirDate"`
+	CCNumber  string `form:"CCNumber"`
+	CVC       string `form:"CVC"`
+	ExpirDate string `form:"ExpirDate"`
 }
 
 type BillingInfo struct {
 	UserID         string         `form:"UserID"`
 	BillingName    string         `form:"BillingName"`
 	BillingAddress BillingAddress `form:"BillingAddress"`
-	CCInfo         CreditCardInfo `form:"CreditCardInfo"`
+	CCInfo         CreditCardInfo `form:"CCInfo"`
+}
+
+type Wallet struct {
+	UserID     string
+	PublicKey  ecdsa.PublicKey
+	PrivateKey ecdsa.PrivateKey
+	Address    common.Address
 }
 
 type UserWallet struct {
 	UserID     string
 	EthAddress string
+}
+
+func (w Wallet) PublicKeyHex() string {
+	publicKeyBytes := crypto.FromECDSAPub(&w.PublicKey)
+	pubkey := fmt.Sprint(hexutil.Encode(publicKeyBytes)[2:])
+	return pubkey
+}
+
+func (w Wallet) PrivateKeyHex() string {
+	privateKeyBytes := crypto.FromECDSA(&w.PrivateKey)
+	privKey := fmt.Sprint(hexutil.Encode(privateKeyBytes)[2:])
+	return privKey
 }
 
 func ConnectDB() *(sql.DB) {
@@ -53,11 +79,11 @@ func CreateUsersTable() {
 
 	wallets := `
 	CREATE TABLE Wallets( userID integer not null primary key, 
-	address text, privateKey text, seedPhrase text);`
+	address text, privateKey text, publicKey text);`
 
 	billing := `
 	CREATE TABLE Billing( userID integer not null primary key,
-	billingName text, address text, city text, state text, zip integer, country text, 
+	name text, address text, city text, state text, zip integer, country text, 
 	CCNum text, CVC integer, expirDate text );`
 
 	_, err1 := db.Exec(wallets)
@@ -81,30 +107,62 @@ func DropDB() {
  *	Save the corresponding keys to the DB.
  *
  */
-func CreateWallet(userID string) string {
+func CreateWallet(userID string) Wallet {
 	//connect to eth provider, and create wallet return the public address.
-	var ethAddress string = "abc"
-	var privateKey string = "abc"
-	var seedPhrase string = "abc"
+
+	var ethAddress common.Address
+	var privateKey *ecdsa.PrivateKey
+	var pubkey *ecdsa.PublicKey
+	//var seedPhrase string
+
+	privateKey, err := crypto.GenerateKey()
+
+	if err != nil {
+		log.Fatalf("Failed to create privtate key for user: %s. Error: %s\n", userID, err)
+	}
+
+	publicKey := privateKey.Public()
+	pubkey = publicKey.(*ecdsa.PublicKey)
+
+	ethAddress = crypto.PubkeyToAddress(*pubkey)
+
+	return Wallet{
+		UserID:     userID,
+		PublicKey:  *pubkey,
+		PrivateKey: *privateKey,
+		Address:    ethAddress,
+	}
+
+}
+
+func SaveWalletInfo(wallet Wallet) error {
 
 	c := ConnectDB()
 
 	stm := `
-		INSERT INTO Wallets(userId, address, privateKey, seedPhrase)  
+		INSERT INTO Wallets(userId, address, privateKey, publicKey)  
 		VALUES(?,?,?,?);`
 
-	_, err := c.Exec(stm, userID, ethAddress, privateKey, seedPhrase)
+	_, err := c.Exec(
+		stm,
+		wallet.UserID,
+		wallet.Address.Hex(),
+		wallet.PrivateKeyHex(),
+		wallet.PublicKeyHex(),
+	)
 	if err != nil {
-		log.Printf("Failed to insert new address for user: %s, ethAddress: %s\n", userID, ethAddress)
+		log.Printf("Failed to insert new address for user: %s, ethAddress: %s\n", wallet.UserID, wallet.Address.Hex())
+		return err
+	} else {
+		return nil
 	}
-	return ethAddress
 }
 
 func SaveBillingInfo(binfo BillingInfo) error {
 
 	c := ConnectDB()
 	stmt := `
-		INSERT INTO Billing(userID, billingName, address, 
+		INSERT INTO Billing(userID, name, address, 
 		city, state, zip, country, CCNum, CVC, expirDate) 
 		VALUES( ?, ?, ?, ?, ?, ?, ?, ?, ?, ? );`
 
@@ -117,13 +175,13 @@ func SaveBillingInfo(binfo BillingInfo) error {
 		binfo.BillingAddress.State,
 		binfo.BillingAddress.Zip,
 		binfo.BillingAddress.Country,
-		binfo.CCInfo.CreditCardNumber,
-		binfo.CCInfo.CardVerificationCode,
-		binfo.CCInfo.ExpirationDate,
+		binfo.CCInfo.CCNumber,
+		binfo.CCInfo.CVC,
+		binfo.CCInfo.ExpirDate,
 	)
 
 	if err != nil {
-		log.Printf("Failed to insert new billing info for user: %s, billingInfo  %#v\n", binfo.UserID, binfo)
+		log.Printf("Failed to insert new billing info for user: %s, error: %s billingInfo  \n%#v\n", binfo.UserID, err, binfo)
 		return err
 	} else {
 		return nil
@@ -136,11 +194,11 @@ func GetBillingInfo(userID string) BillingInfo {
 	var binfo BillingInfo
 	c := ConnectDB()
 
-	q := `SELECT name, address, city, state, zip, country, CCnum, CVC, expirDate FROM Billing WHERE userID = ?`
+	q := `SELECT userID, name, address, city, state, zip, country, CCnum, CVC, expirDate FROM Billing WHERE userID = ?`
 
 	rows, err := c.Query(q, userID)
 	if err != nil {
-		log.Printf("Failed to query DB for %s's billing information. \n", userID)
+		log.Printf("Failed to query DB for %s's billing information. Error: %s \n", userID, err)
 		return binfo
 	}
 
@@ -153,21 +211,21 @@ func GetBillingInfo(userID string) BillingInfo {
 		return binfo
 	}
 	perr := rows.Scan(
+		&binfo.UserID,
 		&binfo.BillingName,
 		&binfo.BillingAddress.Address,
 		&binfo.BillingAddress.City,
 		&binfo.BillingAddress.State,
 		&binfo.BillingAddress.Zip,
 		&binfo.BillingAddress.Country,
-		&binfo.CCInfo.CreditCardNumber,
-		&binfo.CCInfo.CardVerificationCode,
-		&binfo.CCInfo.ExpirationDate,
+		&binfo.CCInfo.CCNumber,
+		&binfo.CCInfo.CVC,
+		&binfo.CCInfo.ExpirDate,
 	)
 
 	if perr != nil {
 		log.Printf("Failed to get the billing info for user: %s\n.", userID)
 	}
-
 	return binfo
 }
 
@@ -180,8 +238,8 @@ func GetUserWallet(userID string) UserWallet {
 	c := ConnectDB()
 	q := `SELECT address FROM Wallets where userID = ?;`
 
-	rows, err := c.Query(q, userID)
-	if err != nil {
+	rows, qerr := c.Query(q, userID)
+	if qerr != nil {
 		log.Printf("Failed to find wallet info for user: %s\n", userID)
 		return result
 	}
@@ -190,7 +248,13 @@ func GetUserWallet(userID string) UserWallet {
 	row := rows.Next()
 
 	if row == false {
-		ethAddress = CreateWallet(userID)
+		wallet := CreateWallet(userID)
+		ethAddress = wallet.Address.Hex()
+		err := SaveWalletInfo(wallet)
+
+		if err != nil {
+			log.Printf("Failed to save wallet info to the DB. Error: %s\n", err)
+		}
 	} else {
 		perr := rows.Scan(&ethAddress)
 		if perr != nil {
@@ -237,19 +301,19 @@ func NewUser(c *gin.Context) {
 	err := c.ShouldBind(&binfo)
 	if err == nil {
 
-		log.Printf("binfo: %#v\n", binfo)
+		//log.Printf("binfo: %#v\n", binfo)
 		uinfo = GetUserWallet(binfo.UserID)
 		err := SaveBillingInfo(binfo)
 
 		if err != nil {
-			log.Printf("Failed to save new billing info: %#v\n", binfo)
-			c.String(500, "Error in saving user billing information")
+			log.Printf("Failed to save new billing info. Error: %s\n", err)
+			c.String(500, "Error in saving user billing information\n")
 		} else {
 			c.JSON(200, uinfo)
 		}
 	} else {
-		log.Printf("Failed to create a new user. Error: %v\n", err)
-		c.String(400, "Error in parsing user infomation.")
+		log.Printf("Failed to create a new user. Error: %s\n", err)
+		c.String(400, "Error in parsing user infomation\n.")
 	}
 }
 
