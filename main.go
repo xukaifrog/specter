@@ -3,23 +3,27 @@ package main
 import (
 	"crypto/ecdsa"
 	"database/sql"
+	"encoding/json"
 	"fmt"
 	"github.com/ethereum/go-ethereum/common"
 	"github.com/ethereum/go-ethereum/common/hexutil"
 	"github.com/ethereum/go-ethereum/crypto"
-	"github.com/gin-contrib/cors"
-	"github.com/gin-gonic/gin"
+	"github.com/ethereum/go-ethereum/ethclient"
 	_ "github.com/mattn/go-sqlite3"
 	"log"
+	"math"
 	"net/http"
 	"os"
-	//"encoding/json"
-	//"strconv"
+	"strconv"
+	//"time"
 	//"io/ioutil"
 	//"github.com/ethereum/go-ethereum/ethclient"
+	//"context"
 )
 
 const INFURA string = "https://mainnet.infura.io/v3/55cbeaa05bf14331b55bb8416e2183f9"
+const STRIPE string = "pk_test_mrBqc7daQkvsOMdZMvmf91RP00a284QgkX"
+const BANKADDRESS string = ""
 
 type BillingAddress struct {
 	Address string `form:"Address"`
@@ -54,6 +58,18 @@ type UserWallet struct {
 	EthAddress string
 }
 
+type EthTransaction struct {
+	Address common.Address
+	Topics  []string
+}
+
+type ChargeInfo struct {
+	UserID  int64 `json:",string"`
+	Ammount int64 `json:",string"`
+	AxieID  int64
+	Token   string
+}
+
 func (w Wallet) PublicKeyHex() string {
 	publicKeyBytes := crypto.FromECDSAPub(&w.PublicKey)
 	pubkey := fmt.Sprint(hexutil.Encode(publicKeyBytes)[2:])
@@ -74,15 +90,25 @@ func connectDB() *(sql.DB) {
 	return db
 }
 
+func connectGethOrDie() *ethclient.Client {
+
+	url := fmt.Sprintf("wss://%s", INFURA)
+	geth, geth_err := ethclient.Dial(url)
+	if geth_err != nil {
+		log.Fatal("Was not able to connect to the Infura Node")
+	}
+	return geth
+}
+
 func createUsersTable() {
 	db := connectDB()
 
 	wallets := `
-	CREATE TABLE Wallets( userID integer not null primary key, 
+	CREATE TABLE Wallets( userID integer not null primary key autoincrement, 
 	address text, privateKey text, publicKey text);`
 
 	billing := `
-	CREATE TABLE Billing( userID integer not null primary key,
+	CREATE TABLE Billing( userID integer not null primary key autoincrement,
 	name text, address text, city text, state text, zip integer, country text, 
 	CCNum text, CVC integer, expirDate text );`
 
@@ -102,18 +128,32 @@ func dropDB() {
 	os.Remove("./users.db")
 }
 
-/**
- *	Create a wallet for the specifed use
- *	Save the corresponding keys to the DB.
- *
- */
+func newUser() UserWallet {
+
+	wallet := createWallet("")
+	userID, err := saveWalletInfo(wallet)
+
+	if err != nil {
+		log.Printf("Failed to save walletinfo for a new user. Error: %s\n", err)
+		return UserWallet{}
+	}
+
+	return UserWallet{
+		UserID:     strconv.Itoa(userID),
+		EthAddress: wallet.Address.Hex(),
+	}
+}
+
+/*
+	Create a wallet for the specifed use
+	Save the corresponding keys to the DB.
+*/
 func createWallet(userID string) Wallet {
 	//connect to eth provider, and create wallet return the public address.
 
 	var ethAddress common.Address
 	var privateKey *ecdsa.PrivateKey
 	var pubkey *ecdsa.PublicKey
-	//var seedPhrase string
 
 	privateKey, err := crypto.GenerateKey()
 
@@ -135,15 +175,21 @@ func createWallet(userID string) Wallet {
 
 }
 
-func saveWalletInfo(wallet Wallet) error {
+func saveWalletInfo(wallet Wallet) (int, error) {
 
 	c := connectDB()
+	var stm string
 
-	stm := `
-		INSERT INTO Wallets(userId, address, privateKey, publicKey)  
-		VALUES(?,?,?,?);`
+	if wallet.UserID != "" {
+		stm = `
+			INSERT INTO Wallets(userId, address, privateKey, publicKey)  
+			VALUES(?,?,?,?);`
+	} else {
+		stm = `INSERT INTO Wallets(address, privateKey, publicKey)
+				Values(?,?,?)`
+	}
 
-	_, err := c.Exec(
+	res, err := c.Exec(
 		stm,
 		wallet.UserID,
 		wallet.Address.Hex(),
@@ -152,9 +198,10 @@ func saveWalletInfo(wallet Wallet) error {
 	)
 	if err != nil {
 		log.Printf("Failed to insert new address for user: %s, ethAddress: %s\n", wallet.UserID, wallet.Address.Hex())
-		return err
+		return 0, err
 	} else {
-		return nil
+		userID, _ := res.LastInsertId()
+		return int(userID), nil
 	}
 }
 
@@ -240,7 +287,7 @@ func getUserWallet(userID string) UserWallet {
 
 	rows, qerr := c.Query(q, userID)
 	if qerr != nil {
-		log.Printf("Failed to find wallet info for user: %s\n", userID)
+		log.Printf("Failed to query DB for wallet info of user: %s\n", userID)
 		return result
 	}
 
@@ -250,7 +297,7 @@ func getUserWallet(userID string) UserWallet {
 	if row == false {
 		wallet := createWallet(userID)
 		ethAddress = wallet.Address.Hex()
-		err := saveWalletInfo(wallet)
+		_, err := saveWalletInfo(wallet)
 
 		if err != nil {
 			log.Printf("Failed to save wallet info to the DB. Error: %s\n", err)
@@ -269,76 +316,57 @@ func getUserWallet(userID string) UserWallet {
 	return result
 }
 
-/*
- * API routing functions.
- *
- *
- */
-
-func Ping(c *gin.Context) {
-	c.String(http.StatusOK, "pong")
-}
-
-func Index(c *gin.Context) {
-
-	message := fmt.Sprintf(`Specter is an a payment processor that enables USD payments for crypto enabled technologies. 
-	"There is a specter haunting the modern world..." - Timothy C. May.`)
-
-	w := c.Writer
-	fmt.Fprintf(w, message)
-}
-
-func NewUser(c *gin.Context) {
-
-	var binfo BillingInfo
-	var uinfo UserWallet
-
-	if c.ContentType() != "application/json" {
-		log.Printf("Recieved a /newUser/ request from %s, but wrong content-type header.", c.ClientIP())
-		c.String(400, "Expecting 'application/json' content-type header")
+func convWeiToUSD(wei int64) float64 {
+	type ExchangeRates struct {
+		USD float64 `json:",string"`
 	}
 
-	err := c.ShouldBind(&binfo)
-	if err == nil {
+	type Data struct {
+		Currency string
+		Rates    ExchangeRates
+	}
 
-		//log.Printf("binfo: %#v\n", binfo)
-		uinfo = getUserWallet(binfo.UserID)
-		err := saveBillingInfo(binfo)
+	type Resp struct {
+		Data Data
+	}
 
-		if err != nil {
-			log.Printf("Failed to save new billing info. Error: %s\n", err)
-			c.String(500, "Error in saving user billing information\n")
-		} else {
-			c.JSON(200, uinfo)
+	inEth := float64(wei) / math.Pow(10, 18)
+	var coinbaseResp Resp
+
+	resp, _ := http.Get("https://api.coinbase.com/v2/exchange-rates?currency=ETH")
+	defer resp.Body.Close()
+
+	err := json.NewDecoder(resp.Body).Decode(&coinbaseResp)
+	if err != nil {
+		if e, ok := err.(*json.SyntaxError); ok {
+			log.Printf("syntax error at byte offset %d", e.Offset)
 		}
-	} else {
-		log.Printf("Failed to create a new user. Error: %s\n", err)
-		c.String(400, "Error in parsing user infomation\n.")
+		log.Fatalf("Failed to decode json response for eth price. Error: %s\n", err)
 	}
+	ethPrice := coinbaseResp.Data.Rates.USD
+
+	//log.Printf("Price of Eth: %f. Price in wei %d. Price in Eth: %f. Price in USD: %f\n",
+	//	ethPrice, wei, inEth, (ethPrice * inEth),
+	//)
+
+	return ethPrice * inEth
 }
 
-func GetUserWallet(c *gin.Context) {
+func getPrivKey(userID int64) ecdsa.PrivateKey {
+	var privKey ecdsa.PrivateKey
 
-	var uinfo UserWallet
-	userID := c.Params.ByName("userID")
-	uinfo = getUserWallet(userID)
+	c := connectDB()
+	q := `SELECT privateKey FROM Wallets where userID = ?`
+	rows, qerr := c.Query(q, userID)
+	if qerr != nil {
+		log.Printf("Failed to find private key for user: %d. Error: %s\n", userID, qerr)
+	}
 
-	c.JSON(200, uinfo)
-}
+	defer rows.Close()
+	_ = rows.Next()
 
-func StartServer() {
-	r := gin.Default()
-
-	//allow all origins
-	config := cors.DefaultConfig()
-	config.AllowAllOrigins = true
-	r.Use(cors.New(config))
-
-	r.GET("/", Index)
-	r.POST("/newuser", NewUser)
-	r.GET("/wallet/:userID", GetUserWallet)
-
-	r.Run()
+	rows.Scan(&privKey)
+	return privKey
 }
 
 func main() {
