@@ -8,6 +8,7 @@ import (
 	"github.com/stripe/stripe-go"
 	"github.com/stripe/stripe-go/charge"
 	"log"
+	"math"
 	"net/http"
 )
 
@@ -88,9 +89,11 @@ func Charge(c *gin.Context) {
 			"chargeInfo struct. ChargeInfo: %#v.\n Error: %s\n",
 			chargeInfo, err)
 	}
+	amt := int64(math.Round(chargeInfo.USD * 100))
+	log.Println("amt is: %d\n", amt)
 
 	params := &stripe.ChargeParams{
-		Amount:      stripe.Int64(chargeInfo.Ammount),
+		Amount:      stripe.Int64(amt),
 		Currency:    stripe.String(string(stripe.CurrencyUSD)),
 		Description: stripe.String("Example charge"),
 	}

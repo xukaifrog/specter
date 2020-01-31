@@ -21,7 +21,7 @@ import (
 	//"context"
 )
 
-const INFURA string = "https://mainnet.infura.io/v3/55cbeaa05bf14331b55bb8416e2183f9"
+const INFURA string = "mainnet.infura.io/ws/v3/55cbeaa05bf14331b55bb8416e2183f9"
 const STRIPE string = "pk_test_mrBqc7daQkvsOMdZMvmf91RP00a284QgkX"
 const BANKADDRESS string = ""
 
@@ -64,10 +64,11 @@ type EthTransaction struct {
 }
 
 type ChargeInfo struct {
-	UserID  int64 `json:",string"`
-	Ammount int64 `json:",string"`
-	AxieID  int64
-	Token   string
+	UserID int64 `json:",string"`
+	USD    float64
+	Wei    int64 `json:",string"`
+	AxieID int64
+	Token  string
 }
 
 func (w Wallet) PublicKeyHex() string {
@@ -166,38 +167,50 @@ func createWallet(userID string) Wallet {
 
 	ethAddress = crypto.PubkeyToAddress(*pubkey)
 
-	return Wallet{
+	wallet := Wallet{
 		UserID:     userID,
 		PublicKey:  *pubkey,
 		PrivateKey: *privateKey,
 		Address:    ethAddress,
 	}
-
+	return wallet
 }
 
 func saveWalletInfo(wallet Wallet) (int, error) {
 
 	c := connectDB()
 	var stm string
+	var res sql.Result
+	var err error
 
 	if wallet.UserID != "" {
 		stm = `
 			INSERT INTO Wallets(userId, address, privateKey, publicKey)  
 			VALUES(?,?,?,?);`
+
+		res, err = c.Exec(
+			stm,
+			wallet.UserID,
+			wallet.Address.Hex(),
+			wallet.PrivateKeyHex(),
+			wallet.PublicKeyHex(),
+		)
 	} else {
 		stm = `INSERT INTO Wallets(address, privateKey, publicKey)
 				Values(?,?,?)`
+
+		res, err = c.Exec(
+			stm,
+			wallet.Address.Hex(),
+			wallet.PrivateKeyHex(),
+			wallet.PublicKeyHex(),
+		)
 	}
 
-	res, err := c.Exec(
-		stm,
-		wallet.UserID,
-		wallet.Address.Hex(),
-		wallet.PrivateKeyHex(),
-		wallet.PublicKeyHex(),
-	)
 	if err != nil {
-		log.Printf("Failed to insert new address for user: %s, ethAddress: %s\n", wallet.UserID, wallet.Address.Hex())
+		log.Printf("Failed to insert new address for user: %s, ethAddress: %s\n",
+			wallet.UserID, wallet.Address.Hex(),
+		)
 		return 0, err
 	} else {
 		userID, _ := res.LastInsertId()
@@ -228,7 +241,9 @@ func saveBillingInfo(binfo BillingInfo) error {
 	)
 
 	if err != nil {
-		log.Printf("Failed to insert new billing info for user: %s, error: %s billingInfo  \n%#v\n", binfo.UserID, err, binfo)
+		log.Printf("Failed to insert new billing info for user: %s, error: %s billingInfo  \n%#v\n",
+			binfo.UserID, err, binfo,
+		)
 		return err
 	} else {
 		return nil
@@ -352,8 +367,8 @@ func convWeiToUSD(wei int64) float64 {
 	return ethPrice * inEth
 }
 
-func getPrivKey(userID int64) ecdsa.PrivateKey {
-	var privKey ecdsa.PrivateKey
+func getPrivKey(userID int64) *ecdsa.PrivateKey {
+	var privKeyStr string
 
 	c := connectDB()
 	q := `SELECT privateKey FROM Wallets where userID = ?`
@@ -363,14 +378,22 @@ func getPrivKey(userID int64) ecdsa.PrivateKey {
 	}
 
 	defer rows.Close()
-	_ = rows.Next()
+	row := rows.Next()
+	if row == false {
+		log.Fatalf("No rows found when querying for private key.")
+	}
 
-	rows.Scan(&privKey)
+	err := rows.Scan(&privKeyStr)
+	if err != nil {
+		log.Fatalf("Failed to covert private key result into a string. Error: %s\n", err)
+	}
+	//log.Printf("privKeystr is: %s\n", privKeyStr)
+	privKey, _ := crypto.HexToECDSA(privKeyStr)
 	return privKey
 }
 
 func main() {
-	dropDB()
-	createUsersTable()
+	//dropDB()
+	//createUsersTable()
 	StartServer()
 }
