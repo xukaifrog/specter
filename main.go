@@ -21,10 +21,6 @@ import (
 	//"context"
 )
 
-const INFURA string = "mainnet.infura.io/ws/v3/55cbeaa05bf14331b55bb8416e2183f9"
-const STRIPE string = "pk_test_mrBqc7daQkvsOMdZMvmf91RP00a284QgkX"
-const BANKADDRESS string = ""
-
 type BillingAddress struct {
 	Address string `form:"Address"`
 	City    string `form:"City"`

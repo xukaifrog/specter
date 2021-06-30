@@ -7,10 +7,6 @@ import (
 )
 
 func get0xOrders() {
-	/*
-		None of this function (read: shit) is needed.
-		But is perserved because of sunk cost... you know
-	*/
 	c, dial := zxrpc.NewClient("ws://localhost:60557")
 
 	if dial != nil {
